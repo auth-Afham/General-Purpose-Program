@@ -6,28 +6,26 @@ from PIL import ImageGrab
 import joblib
 from sklearn.linear_model import SGDRegressor
 import numpy as np
-import random
-import pyaudio
-import keyboard  # Import the keyboard library
-from pynput.keyboard import Key, Listener
-from pynput.mouse import Controller, Listener, Button
+from pynput.keyboard import Key, Listener as KeyboardListener
+from pynput.mouse import Listener as MouseListener, Button, Controller
 import csv
 import speech_recognition as sr
 import audioop
 from textblob import TextBlob
-import threading
+from collections import deque
 
+hearing_filename = "hearing.csv"
+dataset_filename = "dataset.csv"
 model_filename = "model.pkl"
-csv_filename = "spreadsheet.csv"
 
-touch_key = 0
+touch_keyboard = 0
+touch_mouse = 0
 touch_cursor_x = 0
 touch_cursor_y = 0
 
 sight_average_red = 0
 sight_average_green = 0
 sight_average_blue = 0
-sight_uniform_color = False
 
 hearing_amplitude = 0
 
@@ -36,14 +34,33 @@ feedback = 0
 command = 0
 next_command = 0
 
-argument_list = []
-arguments = 0
+argument_1st = 0
+argument_2nd = 0
 
 counter = 0
 action = 0
 
+word_indices = [0] * 10
+with_action_data = [touch_keyboard, touch_mouse, touch_cursor_x, touch_cursor_y, sight_average_red, sight_average_green, sight_average_blue, hearing_amplitude, feedback, command, counter, argument_1st, argument_2nd, action]
+
+# Insert the additional_list between elements 3 and 4 of the original_list
+index_to_insert = 8
+combined_with_action_data = with_action_data[:index_to_insert] + word_indices + with_action_data[index_to_insert:]
+
 previous_controlled_action_flag = False
 controlled_action_flag = False
+
+# Initialize a list to store the last 10 heard words
+heard_words = deque(maxlen=10)
+
+# List of variable names
+variable_names = [
+    "touch_keyboard", "touch_mouse", "touch_cursor_x", "touch_cursor_y",
+    "sight_average_red", "sight_average_green", "sight_average_blue",
+    "hearing_amplitude",
+    "1st_recent_word", "2nd_recent_word", "3rd_recent_word", "4th_recent_word", "5th_recent_word", "6th_recent_word", "7th_recent_word", "8th_recent_word", "9th_recent_word", "10th_recent_word",
+    "feedback", "command", "argument_1st", "argument_2nd", "counter", "action"
+]
 
 negative_keys_to_check = ['backspace', 'del', 'esc', 'ctrl+c', 'ctrl+z', 'f1', 'f4', 'f7', '-', '/', '!', 'capslock']
 
@@ -66,31 +83,6 @@ def floor_positive_ceil_negative(x):
     else:
         return math.ceil(x)
 
-# Callback function for mouse clicks
-def on_click(x, y, button, pressed):
-    global touch_key
-    global feedback
-    global negative_keys_to_check
-    global positive_keys_to_check
-
-    touch_key = 0
-
-    if pressed:
-        if button == Button.left:
-            touch_key = len(negative_keys_to_check) + len(positive_keys_to_check) + 1 # You can assign any unique value you like
-            feedback += 1  # You can assign the appropriate feedback value
-            print("Left mouse button clicked!")
-        elif button == Button.right:
-            touch_key = len(negative_keys_to_check) + len(positive_keys_to_check) + 2 # You can assign any unique value you like
-            feedback += 1  # You can assign the appropriate feedback value
-            print("Right mouse button clicked!")
-
-# Create a listener for mouse clicks
-mouse_listener = Listener(on_click=on_click)
-
-# Start the mouse listener in the background
-mouse_listener.start()
-
 # Function to format the key for display
 def format_key(key):
     if hasattr(key, 'name'):
@@ -100,60 +92,44 @@ def format_key(key):
 
 # Callback function for key presses
 def on_key_press(key):
-    global touch_key
-    global feedback
-    global next_command    
-    global action
-    global negative_keys_to_check
-    global positive_keys_to_check
-
-    touch_key = 0
+    global touch_keyboard, feedback, next_command, action, negative_keys_to_check, positive_keys_to_check
     
     # Format the key for display
-    formatted_key = format_key(key)
-    # Do something when a key is pressed
-    print(f'Key {formatted_key} pressed')
+    formatted_key = format_key(str(key))
 
-    for index, key in enumerate(negative_keys_to_check):
-        if keyboard.is_pressed(key):
-            touch_key = index + 1
-            feedback -= 1
-            next_command = 0            
-            action = 0
-            print(f"'{key}' is pressed at index {touch_key}!")
-            break
+    if formatted_key in negative_keys_to_check:
+        touch_keyboard = negative_keys_to_check.index(formatted_key) + 1
+        feedback -= 1
+        print(f"'{formatted_key}' is pressed at index {touch_keyboard}!")
 
-    for index, key in enumerate(positive_keys_to_check):
-        if keyboard.is_pressed(key):
-            touch_key = len(negative_keys_to_check) + index + 1
-            feedback += 1
-            print(f"'{key}' is pressed at index {touch_key}!")
-            break
+    if formatted_key in positive_keys_to_check:
+        touch_keyboard = len(negative_keys_to_check) + positive_keys_to_check.index(formatted_key) + 1
+        feedback += 1
+        print(f"'{formatted_key}' is pressed at index {touch_keyboard}!")
 
 # Callback function for key releases
 def on_key_release(key):
+    global touch_keyboard
+
     # Do something when a key is released
-    formatted_key = format_key(key)
-    print(f'Key {formatted_key} released')
+    touch_keyboard = 0
 
-    touch_key = 0
+# Callback function for mouse clicks
+def on_click(x, y, button, pressed):
+    global touch_mouse, feedback, negative_keys_to_check, positive_keys_to_check
 
-# Function to check for keypresses
-def keyboard_listener():
-    # Create a listener for keyboard events
-    with Listener(on_press=on_key_press, on_release=on_key_release) as listener:
-        # Start the keyboard listener in the background
-        listener.join()
-
-# Create a thread for the keyboard listener
-keyboard_thread = threading.Thread(target=keyboard_listener)
-
-# Start the keyboard thread
-keyboard_thread.start()
+    if pressed:
+        if button == Button.left:
+            touch_mouse = 2 # You can assign any unique value you like
+            feedback += 1  # You can assign the appropriate feedback value
+            print(f"Left mouse button clicked at index {touch_mouse}!")
+        elif button == Button.right:
+            touch_mouse = 3 # You can assign any unique value you like
+            feedback += 1  # You can assign the appropriate feedback value
+            print(f"Right mouse button clicked at index {touch_mouse}!")
 
 def get_touch_values():
-    global touch_cursor_x
-    global touch_cursor_y
+    global touch_cursor_x, touch_cursor_y
     
     # Initialize the mouse controller
     mouse = Controller()
@@ -162,10 +138,7 @@ def get_touch_values():
     touch_cursor_x, touch_cursor_y = mouse.position
 
 def check_uniform_color(pixel_data):
-    global sight_uniform_color
-    global feedback
-    global next_command
-    global action
+    global feedback, next_command, action
 
     # Get the RGB value of the first pixel
     first_pixel_color = pixel_data[0]
@@ -173,18 +146,14 @@ def check_uniform_color(pixel_data):
     # Check if all pixels have the same color as the first pixel
     if np.all(pixel_data == first_pixel_color):
         feedback -= 1
-        next_command = 0
-        action = 0
         sight_uniform_color = True
         print("The screenshot is a uniform color.")
     else:
         sight_uniform_color = False
-        print("The screenshot has multiple colors.")
+        # print("The screenshot has multiple colors.")
 
 def get_sight_values():
-    global sight_average_red
-    global sight_average_green
-    global sight_average_blue
+    global sight_average_red, sight_average_green, sight_average_blue
 
     # Capture a screenshot
     screenshot = ImageGrab.grab()
@@ -204,20 +173,24 @@ def get_sight_values():
     # Separate the RGB values into separate variables
     sight_average_red, sight_average_green, sight_average_blue = pixel_color[0], pixel_color[1], pixel_color[2]
 
-    # check_uniform_color(pixel_data)
+    check_uniform_color(pixel_data)
 
 def check_amplitude(audio_data):
     # Calculate the amplitude of the audio data
     rms = audioop.rms(audio_data, 2)  # 2 for format=PCM
     return rms
 
+def get_word_index_in_csv(word, existing_words):
+    # Check if the word exists in the CSV file
+    if word in existing_words:
+        return existing_words.index(word) + 1  # Return the index (1-based)
+    return 0
+
 def get_hearing_values():
-    global hearing_amplitude
-    global feedback
-    global next_command
-    global action
+    global hearing_amplitude, feedback, word_indices, heard_words
 
     hearing_amplitude = 0
+    word_indices = [0] * 10
 
     recognizer = sr.Recognizer()
 
@@ -225,11 +198,9 @@ def get_hearing_values():
         print("Say something:")
         try:
             audio = recognizer.listen(source, timeout=0.1)  # Listen for up to 5 seconds
-            print("Listening...")
 
             # Calculate the amplitude of the audio
             hearing_amplitude = check_amplitude(audio.frame_data)
-            print(f"Amplitude: {hearing_amplitude}")
 
             text = recognizer.recognize_google(audio)
             print("You said: " + text)
@@ -237,23 +208,63 @@ def get_hearing_values():
             blob = TextBlob(text)
             feedback += floor_positive_ceil_negative(blob.sentiment.polarity * 10)
 
-            if feedback < 0:
-                next_command = 0
-                action = 0
+            # Tokenize the text into words
+            words = text.lower().split()  # Convert to lowercase
 
-            print(f"Polarity Score: {blob.sentiment.polarity}")
+            heard_words = words[-10:]
+            
+            # Write the list of unique words to a CSV file
+            write_heard_words_to_csv()
 
         except sr.UnknownValueError:
             print("Sorry, I could not understand your speech.")
+            pass
         except sr.RequestError as e:
             print("Could not request results; {0}".format(e))
+            pass
         except sr.WaitTimeoutError:
             print("Listening timed out. No speech detected.")
+            pass
+
+def write_heard_words_to_csv():
+    global hearing_filename, word_indices, heard_words
+
+    # Read the existing list of unique words from the CSV file
+    existing_words = read_existing_words_from_csv()
+    
+    # Add new unique words to the existing list
+    for word in heard_words:
+        if word not in existing_words:
+            existing_words.append(word)
+    
+    # Write the updated list of unique words to the CSV file
+    with open(hearing_filename, 'w', newline='') as file:
+        writer = csv.writer(file)
+        for word in existing_words:
+            writer.writerow([word])
+
+    # Get the index of each word in the CSV or 0 if it doesn't exist
+    word_indices = [get_word_index_in_csv(word, existing_words) for word in heard_words]
+
+    # Add spaces to the list as needed
+    while len(word_indices) < 10:
+        word_indices.append(0)
+
+def read_existing_words_from_csv():
+    global hearing_filename
+
+    existing_words = []
+    
+    # Check if the CSV file already exists
+    if os.path.exists(hearing_filename):
+        with open(hearing_filename, 'r', newline='') as file:
+            reader = csv.reader(file)
+            for row in reader:
+                existing_words.append(row[0])
+    
+    return existing_words
 
 def get_feedback_values():
-    global touch_key
-    global sight_uniform_color
-
     global feedback
 
     if feedback > 0:
@@ -280,8 +291,6 @@ def get_angle_and_speed():
 
     # Calculate the distance between the two points (speed)
     dist = math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
-
-    print(f"Angle: {angle_degrees} degrees, Speed: {dist} pixels/second")
 
     return angle_degrees, dist
 
@@ -321,11 +330,11 @@ def move_cursor_smoothly(angle_degrees, speed, steps=100):
         time.sleep(0.01)
 
 def check_controlled_action():
-    global touch_key
+    global touch_mouse
     global command
-    global next_command    
-    global argument_list
-    global arguments
+    global next_command  
+    global argument_1st
+    global argument_2nd
     global counter
     global action
     global controlled_action_flag
@@ -336,32 +345,32 @@ def check_controlled_action():
 
     if angle != 0 and speed != 0 and controlled_action_flag == False:
         next_command = 1
+        argument_1st = 0
+        argument_2nd = 0
         counter = 0
-        argument_list = []
-        arguments = 0
         action = 1
         controlled_action_flag = True
-        touch_key = len(negative_keys_to_check) + len(positive_keys_to_check) + 3
+        touch_mouse = 1
 
-def get_predicted_action_values(without_action_data):
-    global touch_key
+def get_predicted_action_values(combined_without_action_data):
+    global touch_mouse
     global command
-    global next_command    
-    global argument_list
-    global arguments
+    global next_command  
+    global argument_1st
+    global argument_2nd
     global counter
     global action
     global controlled_action_flag
     global negative_keys_to_check
     global positive_keys_to_check
 
-    touch_key = 0
+    touch_mouse = 0
 
     if controlled_action_flag == False:
         # Load the existing model
         existing_model = joblib.load(model_filename)
 
-        predicted_action = existing_model.predict(np.array(without_action_data).reshape(1, -1))[0]
+        predicted_action = existing_model.predict(np.array(combined_without_action_data).reshape(1, -1))[0]
 
     if next_command == 0: # Nothing / Predict command
         command = 0
@@ -369,8 +378,8 @@ def get_predicted_action_values(without_action_data):
             next_command = floor_positive_absolute(predicted_action % 2)
         else:
             next_command = 0
-        argument_list = []
-        arguments = 0
+        argument_1st = 0
+        argument_2nd = 0
         action = next_command
         counter = 0
         check_controlled_action()
@@ -380,94 +389,29 @@ def get_predicted_action_values(without_action_data):
             if counter == 0: # Angle
                 angle, speed = get_angle_and_speed()
                 action = angle
-                argument_list.append(action)
-
-                # Convert any negative data in argument_list into positive data
-                argument_list_positive = [abs(x) for x in argument_list]
-
-                # Floor the data in argument_list
-                argument_list_floor = [math.floor(x) for x in argument_list_positive]
-
-                # Convert argument_list to string and zfill each data by 3 with 0
-                argument_list_string = [str(x).zfill(4) for x in argument_list_floor]
-
-                # F-string together data in argument_list into one string
-                argument_string = ''.join(argument_list_string)
-
-                # Convert the fstring to integer
-                arguments = int(argument_string)
-
+                argument_1st = action
                 counter += 1
             elif counter == 1: # Speed & Execute
                 angle, speed = get_angle_and_speed()
                 action = speed
-                argument_list.append(action)
-                
-                # Convert any negative data in argument_list into positive data
-                argument_list_positive = [abs(x) for x in argument_list]
-
-                # Floor the data in argument_list
-                argument_list_floor = [math.floor(x) for x in argument_list_positive]
-
-                # Convert argument_list to string and zfill each data by 3 with 0
-                argument_list_string = [str(x).zfill(4) for x in argument_list_floor]
-
-                # F-string together data in argument_list into one string
-                argument_string = ''.join(argument_list_string)
-
-                # Convert the fstring to integer
-                arguments = int(argument_string)
-
+                argument_2nd = action
                 next_command = 0
                 counter += 1
                 controlled_action_flag = False
-            touch_key = len(negative_keys_to_check) + len(positive_keys_to_check) + 3
+            touch_mouse = 1
         else:
             if counter == 0: # Angle
                 action = abs(predicted_action % 360)
-                argument_list.append(action)
-
-                # Convert any negative data in argument_list into positive data
-                argument_list_positive = [abs(x) for x in argument_list]
-
-                # Floor the data in argument_list
-                argument_list_floor = [math.floor(x) for x in argument_list_positive]
-
-                # Convert argument_list to string and zfill each data by 3 with 0
-                argument_list_string = [str(x).zfill(4) for x in argument_list_floor]
-
-                # F-string together data in argument_list into one string
-                argument_string = ''.join(argument_list_string)
-
-                # Convert the fstring to integer
-                arguments = int(argument_string)
-
+                argument_1st = action
                 counter += 1
             elif counter == 1: # Speed & Execute
                 next_command = 0
-
                 action = abs(predicted_action % 1080)
-                argument_list.append(action)
-                
-                # Convert any negative data in argument_list into positive data
-                argument_list_positive = [abs(x) for x in argument_list]
-
-                # Floor the data in argument_list
-                argument_list_floor = [math.floor(x) for x in argument_list_positive]
-
-                # Convert argument_list to string and zfill each data by 3 with 0
-                argument_list_string = [str(x).zfill(4) for x in argument_list_floor]
-
-                # F-string together data in argument_list into one string
-                argument_string = ''.join(argument_list_string)
-
-                # Convert the fstring to integer
-                arguments = int(argument_string)
-
+                argument_2nd = action
                 counter += 1   
 
                 print("Moving the cursor predictively...")
-                move_cursor_smoothly(argument_list[0], argument_list[1])
+                move_cursor_smoothly(argument_1st, argument_2nd)
 
             check_controlled_action()      
 
@@ -513,7 +457,11 @@ def train_sgd_regressor_online(data, model_filename=model_filename):
         print(f"Model saved to {model_filename}")
 
 def get_features_to_list():
-    global touch_key
+    global dataset_filename
+    global model_filename
+
+    global touch_keyboard
+    global touch_mouse
     global touch_cursor_x
     global touch_cursor_y
 
@@ -525,38 +473,43 @@ def get_features_to_list():
 
     global feedback
     global command
-    global arguments
+    global argument_1st
+    global argument_2nd
     global counter
     global action
 
-    global model_filename
-    global csv_filename
+    global index_to_insert
+    global word_indices
 
     get_touch_values()
     get_sight_values()
     get_hearing_values()
     get_feedback_values()
 
-    without_action_data = [touch_key, touch_cursor_x, touch_cursor_y, sight_average_red, sight_average_green, sight_average_blue, hearing_amplitude, feedback, command, arguments, counter]
-    get_predicted_action_values(without_action_data) # get user Contolled actions
+    without_action_data = [touch_keyboard, touch_mouse, touch_cursor_x, touch_cursor_y, sight_average_red, sight_average_green, sight_average_blue, hearing_amplitude, feedback, command, counter, argument_1st, argument_2nd]
+    combined_without_action_data = without_action_data[:index_to_insert] + word_indices + without_action_data[index_to_insert:]
+    get_predicted_action_values(combined_without_action_data) # get user Contolled actions
 
-    with open(csv_filename, 'a', newline='') as file:
+    # Define example data (input features and output)
+    with_action_data = [touch_keyboard, touch_mouse, touch_cursor_x, touch_cursor_y, sight_average_red, sight_average_green, sight_average_blue, hearing_amplitude, feedback, command, counter, argument_1st, argument_2nd, action]
+    combined_with_action_data = with_action_data[:index_to_insert] + word_indices + with_action_data[index_to_insert:]
+
+    with open(dataset_filename, 'a', newline='') as file:
         writer = csv.writer(file)
     
-        # Define example data (input features and output)
-        with_action_data = [[touch_key, touch_cursor_x, touch_cursor_y, sight_average_red, sight_average_green, sight_average_blue, hearing_amplitude, feedback, command, arguments, counter, action]]
-    
         # Write example data to the CSV file
-        writer.writerows(with_action_data)
+        writer.writerows([combined_with_action_data])
 
     if previous_controlled_action_flag == True and controlled_action_flag == False:
         # Create an empty list to store the data
         data = []
 
         # Open the CSV file for reading
-        with open(csv_filename, 'r') as file:
+        with open(dataset_filename, 'r') as file:
             # Create a CSV reader object
             csv_reader = csv.reader(file)
+
+            next(csv_reader)  # Skip the header row
             
             # Iterate over each row in the CSV file
             for row in csv_reader:
@@ -568,23 +521,26 @@ def get_features_to_list():
                 # Append the row to the data list
                 data.append(row)
 
-        # Now, 'data' contains your CSV data as a list of lists
-        # Each inner list represents a row of data
-
         train_sgd_regressor_online(data[0])
     elif controlled_action_flag == False:
         # Train the model with the sample data
-        train_sgd_regressor_online(with_action_data[0])
+        train_sgd_regressor_online(combined_with_action_data)
 
-initialize_data = [touch_key, touch_cursor_x, touch_cursor_y, sight_average_red, sight_average_green, sight_average_blue, hearing_amplitude, feedback, command, arguments, counter, action]
+if __name__ == '__main__':
+    if not os.path.exists(model_filename):
+        initialize_model(combined_with_action_data)
 
-initialize_model(initialize_data)
+    if not os.path.exists(dataset_filename):
+        with open(dataset_filename, 'w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerows([variable_names])
 
-with open(csv_filename, 'w', newline='') as file:
-    writer = csv.writer(file)
-
-while True:
-    previous_controlled_action_flag = controlled_action_flag
-
-    print("---")
-    get_features_to_list()
+    with KeyboardListener(on_press=on_key_press, on_release=on_key_release) as keyboard_listener:
+        with MouseListener(on_click=on_click) as mouse_listener:
+            try:
+                while True:
+                    get_features_to_list()
+            except KeyboardInterrupt:
+                print("KeyboardInterrupt: Stopping background processes...")
+                keyboard_listener.stop()
+                mouse_listener.stop()
