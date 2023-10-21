@@ -9,27 +9,43 @@ import numpy as np
 from pynput.keyboard import Key, Listener as KeyboardListener
 from pynput.mouse import Listener as MouseListener, Button, Controller
 import csv
-import speech_recognition as sr
-import audioop
-from textblob import TextBlob
 from collections import deque
 import socket
-import io
+import pyttsx3
 
 HEARING_FILENAME = "hearing.csv"
 DATASET_FILENAME = "dataset.csv"
 MODEL_FILENAME = "model.pkl"
 
-RESET_FILES = True
+RESET_STARTING_FILES = False
+RESET_TRAINING_FILES = True
 
-# NOTHING_PREDICT_COMMAND = 0
-# MOUSE_CLICK_COMMAND = 1
-# MOVING_CURSOR_COMMAND = 2
+# Sort by probability:
+
+MAX_COMMAND_COUNT = 5
+
+NOTHING_PREDICT_COMMAND = 0
+
+# DESTROY_SPACE_COMMAND =  
+# CREATE_SPACE_COMMAND =
+
+# HEARING_FOCUS_COMMAND =
+# SIGHT_FOCUS_COMMAND = 
+# TOUCH_FOCUS_COMMAND = 
+
+TEXT_TO_SPEECH_COMMAND = 1
+
+# KEY_RELEASE_COMMAND = 
+BUTTON_PRESS_COMMAND = 2
+
+# MOUSE_RELEASE_COMMAND =
+CURSOR_CLICK_COMMAND = 3
+MOVE_CURSOR_COMMAND = 4
 
 action = 0
 
-touch_keyboard = 0
-touch_mouse = 0
+touch_button = 0
+touch_cursor = 0
 touch_cursor_x = 0
 touch_cursor_y = 0
 
@@ -46,22 +62,22 @@ argument_2 = 0
 
 previous_angle = 0
 previous_speed = 0
-previous_touch_mouse = 0
+previous_touch_cursor = 0
+previous_touch_button = 0
 
 PIXEL_COUNT = 432 # = 16 * 9 * 3 = height * width * rgb
 WORD_COUNT = 9 
 
 sight_pixels = [0] * PIXEL_COUNT 
 hearing_words = [0] * WORD_COUNT
-with_action_data = [action, touch_keyboard, touch_mouse, touch_cursor_x, touch_cursor_y, hearing_amplitude, feedback, command, counter, argument_1, argument_2]
+with_action_data = [action, touch_button, touch_cursor, touch_cursor_x, touch_cursor_y, hearing_amplitude, feedback, command, counter, argument_1, argument_2]
 
 # Insert the additional_list between elements 3 and 4 of the original_list
 combined_with_action_data = with_action_data + sight_pixels + hearing_words
 
-mouse_click_flag = False
-
-previous_controlled_action_flag = False
-controlled_action_flag = False
+user_action_flag = False
+user_mouse_click_flag = False
+user_button_press_flag = False
 
 # 16:9 == 1920:1080
 # Desired width
@@ -78,7 +94,7 @@ heard_words = deque(maxlen=WORD_COUNT)
 # List of variable names
 variable_names = [
     "action",
-    "touch_keyboard", "touch_mouse", "touch_cursor_x", "touch_cursor_y",
+    "touch_button", "touch_cursor", "touch_cursor_x", "touch_cursor_y",
     "hearing_amplitude",
     "feedback", "command", "counter", "argument_1", "argument_2",
 ]
@@ -88,7 +104,7 @@ hearing_word_headers = [f"h{i}" for i in range(1, WORD_COUNT + 1)]
 
 combined_variable_names = variable_names + sight_pixel_headers + hearing_word_headers
 
-negative_keys_to_check = ['backspace', 'del', 'esc', 'ctrl+c', 'ctrl+z', 'f1', 'f4', 'f7', '-', '/', '!', 'capslock']
+negative_keys_to_check = ['backspace', 'del', 'esc', 'ctr2Cl+c', 'ctrl+z', 'f1', 'f4', 'f7', '-', '/', '!', 'capslock']
 
 # Define a list of keys you want to check
 positive_keys_to_check = [
@@ -99,15 +115,7 @@ positive_keys_to_check = [
     'space', 'enter', 'shift', 'ctrl', 'alt',  # Other keys
 ]
 
-def floor_positive_absolute(x):
-    # Calculate the floor value of the absolute (positive) value of x
-    return math.floor(abs(x))
-
-def floor_positive_ceil_negative(x):
-    if x >= 0:
-        return math.floor(x)
-    else:
-        return math.ceil(x)
+combined_keys_to_check = negative_keys_to_check + positive_keys_to_check
 
 # Function to format the key for display
 def format_key(key):
@@ -118,41 +126,52 @@ def format_key(key):
 
 # Callback function for key presses
 def on_key_press(key):
-    global touch_keyboard, feedback, next_command, action, negative_keys_to_check, positive_keys_to_check
+    global touch_button, feedback
+    global previous_touch_button
+    global user_button_press_flag
+    global negative_keys_to_check, positive_keys_to_check
     
     # Format the key for display
     formatted_key = format_key(str(key))
 
     if formatted_key in negative_keys_to_check:
-        touch_keyboard = negative_keys_to_check.index(formatted_key) + 1
+        touch_button = negative_keys_to_check.index(formatted_key) + 1
         feedback -= 1
-        print(f"'{formatted_key}' is pressed at index {touch_keyboard}!")
+        print(f"'{formatted_key}' is pressed at index {touch_button}!")
+        previous_touch_button = touch_button
+        user_button_press_flag = True
 
     if formatted_key in positive_keys_to_check:
-        touch_keyboard = len(negative_keys_to_check) + positive_keys_to_check.index(formatted_key) + 1
+        touch_button = len(negative_keys_to_check) + positive_keys_to_check.index(formatted_key) + 1
         feedback += 1
-        print(f"'{formatted_key}' is pressed at index {touch_keyboard}!")
+        print(f"'{formatted_key}' is pressed at index {touch_button}!")
+        previous_touch_button = touch_button
+        user_button_press_flag = True
 
 # Callback function for key releases
 def on_key_release(key):
-    global touch_keyboard
+    global touch_button
 
     # Do something when a key is released
-    touch_keyboard = 0
+    touch_button = 0
 
 # Callback function for mouse clicks
 def on_click(x, y, button, pressed):
-    global touch_mouse, feedback, mouse_click_flag, negative_keys_to_check, positive_keys_to_check
+    global touch_cursor, feedback
+    global previous_touch_cursor
+    global user_mouse_click_flag
+    global negative_keys_to_check, positive_keys_to_check
 
     if pressed:
         if button == Button.left:
-            touch_mouse = 2 # You can assign any unique value you like
-            print(f"Left mouse button clicked at index {touch_mouse}!")
+            touch_cursor = 2 # You can assign any unique value you like
+            print(f"Left mouse button clicked at index {touch_cursor}!")
         elif button == Button.right:
-            touch_mouse = 3 # You can assign any unique value you like
-            print(f"Right mouse button clicked at index {touch_mouse}!")
+            touch_cursor = 3 # You can assign any unique value you like
+            print(f"Right mouse button clicked at index {touch_cursor}!")
         feedback += 1  # You can assign the appropriate feedback value
-        mouse_click_flag = True
+        previous_touch_cursor = touch_cursor
+        user_mouse_click_flag = True
 
 def get_touch_values():
     global touch_cursor_x, touch_cursor_y
@@ -164,7 +183,7 @@ def get_touch_values():
     touch_cursor_x, touch_cursor_y = mouse.position
 
 def check_uniform_color(pixel_data):
-    global feedback, next_command, action
+    global feedback
 
     # Get the RGB value of the first pixel
     first_pixel_color = pixel_data[0]
@@ -197,59 +216,25 @@ def get_sight_values():
 
     check_uniform_color(pixel_data)
 
-def check_amplitude(audio_data):
-    # Calculate the amplitude of the audio data
-    rms = audioop.rms(audio_data, 2)  # 2 for format=PCM
-    return rms
+def read_existing_words_from_csv():
+    global HEARING_FILENAME
+
+    existing_words = []
+    
+    # Check if the CSV file already exists
+    if os.path.exists(HEARING_FILENAME):
+        with open(HEARING_FILENAME, 'r', newline='') as file:
+            reader = csv.reader(file)
+            for row in reader:
+                existing_words.append(row[0])
+    
+    return existing_words
 
 def get_word_index_in_csv(word, existing_words):
     # Check if the word exists in the CSV file
     if word in existing_words:
         return existing_words.index(word) + 1  # Return the index (1-based)
     return 0
-
-def get_hearing_receiver():
-    global hearing_values_socket, hearing_amplitude, feedback, WORD_COUNT, hearing_words, heard_words
-
-    hearing_amplitude = 0
-    hearing_words = [0] * WORD_COUNT
-
-    # Receive hearing values from the hearing values script
-    hearing_values_socket.settimeout(0.1)  # Set a timeout of 0.1 seconds
-    try:
-        # Receive the path to the WAV file
-        wav_file_path = hearing_values_socket.recv(1024).decode()
-
-        # Load the audio from the WAV file
-        audio = sr.AudioFile(wav_file_path)
-
-        # Recognize audio
-        recognizer = sr.Recognizer()
-        with audio as source:
-            audio_data = recognizer.record(source)
-
-        # Calculate the amplitude of the audio
-        hearing_amplitude = check_amplitude(audio_data.frame_data)
-
-        text = recognizer.recognize_google(audio_data)
-        print("You said: " + text)
-
-        blob = TextBlob(text)
-        feedback += blob.sentiment.polarity * 100
-
-        # Tokenize the text into words
-        words = text.lower().split()  # Convert to lowercase
-
-        heard_words = words[-WORD_COUNT:]
-        
-        # Write the list of unique words to a CSV file
-        write_heard_words_to_csv()
-
-        # Clean up the temporary WAV file
-        os.remove(wav_file_path)
-    except socket.timeout:
-        # No data received in 0.1 seconds, continue processing or do nothing
-        pass
 
 def write_heard_words_to_csv():
     global HEARING_FILENAME, WORD_COUNT, hearing_words, heard_words
@@ -275,19 +260,35 @@ def write_heard_words_to_csv():
     while len(hearing_words) < WORD_COUNT:
         hearing_words.append(0)
 
-def read_existing_words_from_csv():
-    global HEARING_FILENAME
+def get_hearing_receiver():
+    global hearing_values_socket, hearing_amplitude, feedback, WORD_COUNT, hearing_words, heard_words
 
-    existing_words = []
-    
-    # Check if the CSV file already exists
-    if os.path.exists(HEARING_FILENAME):
-        with open(HEARING_FILENAME, 'r', newline='') as file:
-            reader = csv.reader(file)
-            for row in reader:
-                existing_words.append(row[0])
-    
-    return existing_words
+    hearing_amplitude = 0
+    hearing_words = [0] * WORD_COUNT
+
+    # Receive hearing values from the hearing values script
+    hearing_values_socket.settimeout(0.1)  # Set a timeout of 0.1 seconds
+    try:
+        # Receive the data from the client script
+        data = hearing_values_socket.recv(1024).decode()
+
+        # Split the received data into individual values
+        values = data.split(',')
+        
+        # Extract the values
+        hearing_amplitude = float(values[0])
+        feedback = float(values[1])
+        # {','.join(map(str, heard_words))}
+        heard_words = values[2:]
+        # print(heard_words)
+
+        # You can now use hearing_amplitude, feedback, and heard_words as needed
+
+        # Write the list of unique words to a CSV file
+        write_heard_words_to_csv()
+    except socket.timeout:
+        # No data received in 0.1 seconds, continue processing or do nothing
+        pass
 
 def get_feedback_values():
     global feedback
@@ -299,6 +300,8 @@ def get_feedback_values():
 
 # Function to calculate speed and angle between two cursor positions
 def get_angle_and_speed():
+    global previous_angle, previous_speed
+
     # Get the current cursor position
     x1, y1 = pyautogui.position()
 
@@ -317,44 +320,70 @@ def get_angle_and_speed():
     # Calculate the distance between the two points (speed)
     dist = math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
 
+    previous_angle, previous_speed = angle_degrees, dist
+
     return angle_degrees, dist
 
-def check_controlled_action():
+def check_controlled_action(bot_action_flag):
+    global NOTHING_PREDICT_COMMAND, CURSOR_CLICK_COMMAND, MOVE_CURSOR_COMMAND
     global action
-    global touch_mouse
+    global touch_cursor, touch_button
     global command, next_command
     global counter
     global argument_1, argument_2
-    global previous_angle, previous_speed, previous_touch_mouse
-    global mouse_click_flag, controlled_action_flag
+    global previous_angle, previous_speed, previous_touch_cursor
+    global user_action_flag, user_mouse_click_flag, user_button_press_flag
     global negative_keys_to_check, positive_keys_to_check
 
     angle, speed = get_angle_and_speed()
 
-    if controlled_action_flag == False:
-        if mouse_click_flag: # needs to fix this
-            previous_touch_mouse = touch_mouse
-            action = 1
-            command = 0
-            next_command = 1
+    if not user_action_flag and not bot_action_flag:
+        if user_button_press_flag:
+            action = BUTTON_PRESS_COMMAND
+            command = NOTHING_PREDICT_COMMAND
+            next_command = BUTTON_PRESS_COMMAND
             counter = 0
             argument_1 = 0
             argument_2 = 0
-            controlled_action_flag = True
+            user_action_flag = True
+        elif user_mouse_click_flag:
+            action = CURSOR_CLICK_COMMAND
+            command = NOTHING_PREDICT_COMMAND
+            next_command = CURSOR_CLICK_COMMAND
+            counter = 0
+            argument_1 = 0
+            argument_2 = 0
+            user_action_flag = True
         elif angle != 0 and speed != 0:
-            previous_angle, previous_speed = angle, speed
-            action = 2
-            command = 0
-            next_command = 2
+            action = CURSOR_CLICK_COMMAND
+            command = NOTHING_PREDICT_COMMAND
+            next_command = MOVE_CURSOR_COMMAND
             counter = 0
             argument_1 = 0
             argument_2 = 0
-            controlled_action_flag = True
+            user_action_flag = True
 
-def simulate_mouse_click(touch_mouse):
-    if touch_mouse == 2:
+def simulate_text_to_speech(text):
+    # Initialize the TTS engine
+    tts_engine = pyttsx3.init()
+
+    # Use the TTS engine to speak the text
+    tts_engine.say(text)
+    tts_engine.runAndWait()
+
+def simulate_button_press(touch_button):
+    global positive_keys_to_check, combined_keys_to_check
+    # Simulate key presses based on the touch_button value
+    # You can map touch_button values to specific key presses here
+    # For example:
+    print("simulate_button_press = ", positive_keys_to_check[touch_button % len(positive_keys_to_check)])
+    pyautogui.press(combined_keys_to_check[touch_button])
+    # Add more cases for other keys you want to simulate
+
+def simulate_mouse_click(touch_cursor):
+    if touch_cursor == 2:
         pyautogui.click(button='left')
-    elif touch_mouse == 3:
+    elif touch_cursor == 3:
         pyautogui.click(button='right')
 
 def simulate_moving_cursor(angle_degrees, speed, steps=100, safety_margin=10):
@@ -392,65 +421,104 @@ def simulate_moving_cursor(angle_degrees, speed, steps=100, safety_margin=10):
         time.sleep(0.01)
 
 def get_predicted_action_values(combined_without_action_data):
+    global MAX_COMMAND_COUNT, NOTHING_PREDICT_COMMAND, CURSOR_CLICK_COMMAND, MOVE_CURSOR_COMMAND
     global action
-    global touch_mouse
+    global touch_cursor
     global command, next_command
     global counter
     global argument_1, argument_2
-    global previous_angle, previous_speed, previous_touch_mouse
-    global mouse_click_flag, controlled_action_flag
-    global negative_keys_to_check, positive_keys_to_check
+    global hearing_amplitude, hearing_words
+    global previous_angle, previous_speed, previous_touch_cursor, previous_touch_button
+    global user_action_flag, user_mouse_click_flag, user_button_press_flag
+    global negative_keys_to_check, positive_keys_to_check, combined_keys_to_check
 
-    touch_mouse = 0
+    touch_cursor = 0
+    touch_button = 0
+    bot_action_flag = False
 
-    if controlled_action_flag == False:
+    if user_action_flag == False:
         # Load the existing model
         existing_model = joblib.load(MODEL_FILENAME)
-
         predicted_action = existing_model.predict(np.array(combined_without_action_data).reshape(1, -1))[0]
 
-    if next_command == 0: # Nothing / Predict command
-        command = 0
-        if controlled_action_flag == False:
-            next_command = floor_positive_absolute(predicted_action) % 3
+    if next_command == NOTHING_PREDICT_COMMAND: # Nothing / Predict command
+        command = NOTHING_PREDICT_COMMAND
+        if user_action_flag == False:
+            next_command = math.floor(abs(predicted_action)) % MAX_COMMAND_COUNT
+            print("next_command = ", next_command)
         else:
-            next_command = 0
+            next_command = NOTHING_PREDICT_COMMAND
+        if next_command == 1 and len(read_existing_words_from_csv()) == 0:
+            next_command = NOTHING_PREDICT_COMMAND
         action = next_command
         counter = 0
         argument_1 = argument_2 = 0
-        check_controlled_action()
-    elif next_command == 1: # Mouse Click command
-        command = 1
-        if controlled_action_flag:
-            touch_mouse = previous_touch_mouse
-            action = touch_mouse
+        check_controlled_action(bot_action_flag)
+    elif next_command == TEXT_TO_SPEECH_COMMAND: # Text-to-Speech command
+        hearing_amplitude = 0
+        hearing_words = [0] * WORD_COUNT
+        command = TEXT_TO_SPEECH_COMMAND
+        action = math.floor(abs(predicted_action)) % len(read_existing_words_from_csv())
+        print("action = ", action)
+        counter += 1
+        argument_1 = action
+        hearing_words[0] = argument_1
+        next_command = NOTHING_PREDICT_COMMAND
+        simulate_text_to_speech(read_existing_words_from_csv()[argument_1])
+    elif next_command == BUTTON_PRESS_COMMAND: # Key Press command
+        command = BUTTON_PRESS_COMMAND
+        if user_action_flag:
+            touch_button = previous_touch_button
+            action = touch_button
             counter += 1
             argument_1 = action
-            next_command = 0
-            mouse_click_flag = False
-            controlled_action_flag = False
+            next_command = NOTHING_PREDICT_COMMAND
+            user_button_press_flag = False
+            user_action_flag = False
         else:
-            action = floor_positive_absolute(predicted_action) % 2 + 2
-            touch_mouse = action
+            action = int(math.floor(abs(predicted_action)) % len(combined_keys_to_check))
+            print("action = ", action)
+            touch_button = action + 1
             counter += 1
             argument_1 = action
-            next_command = 0
+            next_command = NOTHING_PREDICT_COMMAND
+            simulate_button_press(argument_1)
+            # bot_action_flag = True
+            # check_controlled_action(bot_action_flag)
+    elif next_command == CURSOR_CLICK_COMMAND: # Mouse Click command
+        command = CURSOR_CLICK_COMMAND
+        if user_action_flag:
+            touch_cursor = previous_touch_cursor
+            action = touch_cursor
+            counter += 1
+            argument_1 = action
+            next_command = NOTHING_PREDICT_COMMAND
+            user_mouse_click_flag = False
+            user_action_flag = False
+        else:
+            action = math.floor(abs(predicted_action)) % 2 + 2
+            print("action = ", action)
+            touch_cursor = action
+            counter += 1
+            argument_1 = action
+            next_command = NOTHING_PREDICT_COMMAND
             simulate_mouse_click(argument_1)
-            check_controlled_action()
-    elif next_command == 2: # Move Cursor command
-        command = 2
-        if controlled_action_flag:
+            # bot_action_flag = True
+            # check_controlled_action(bot_action_flag)    
+    elif next_command == MOVE_CURSOR_COMMAND: # Move Cursor command
+        command = MOVE_CURSOR_COMMAND
+        if user_action_flag:
             if counter == 0: # Angle
                 action = previous_angle
                 counter += 1
                 argument_1 = action
             elif counter == 1: # Speed & Execute
                 action = previous_speed
-                touch_mouse = 1
+                touch_cursor = 1
                 counter += 1
                 argument_2 = action
-                next_command = 0
-                controlled_action_flag = False
+                next_command = NOTHING_PREDICT_COMMAND
+                user_action_flag = False
         else:
             if counter == 0: # Angle
                 action = abs(predicted_action) % 360
@@ -458,12 +526,14 @@ def get_predicted_action_values(combined_without_action_data):
                 argument_1 = action
             elif counter == 1: # Speed & Execute
                 action = abs(predicted_action) % 1080
-                touch_mouse = 1
+                touch_cursor = 1
                 counter += 1
                 argument_2 = action  
-                next_command = 0
+                next_command = NOTHING_PREDICT_COMMAND
                 simulate_moving_cursor(argument_1, argument_2)
-            check_controlled_action()      
+                bot_action_flag = True
+            print("action = ", action)
+            check_controlled_action(bot_action_flag)    
 
 def initialize_model(data, model_filename=MODEL_FILENAME):
     # Extract features (everything except the last element) and target (last element)
@@ -483,23 +553,24 @@ def initialize_model(data, model_filename=MODEL_FILENAME):
 
 def train_sgd_regressor_online(data, model_filename=MODEL_FILENAME):
     # Extract features (everything except the last element) and target (last element)
-    X = np.array(data[1:]).reshape(1, -1)
-    y = np.array(data[0])
+    X = np.array([row[1:] for row in data])  # Extract features for all rows
+    y = np.array([row[0] for row in data])   # Extract targets for all rows
 
     # Load the existing model
     existing_model = joblib.load(MODEL_FILENAME)
     
-    # Update the existing model with the new data point
-    existing_model.partial_fit(X, [y])
+    # Update the existing model with the new data points
+    # Use ravel() to convert y to a 1D array
+    existing_model.partial_fit(X, y)
     
     # Save the updated model back to the same file, overwriting the previous model
     joblib.dump(existing_model, MODEL_FILENAME)
 
 def get_features_to_list():
     global DATASET_FILENAME, MODEL_FILENAME
-    global RESET_FILES
+    global RESET_STARTING_FILES, RESET_TRAINING_FILES
     global action
-    global touch_keyboard, touch_mouse
+    global touch_button, touch_cursor
     global touch_cursor_x, touch_cursor_y
     global hearing_amplitude
     global feedback
@@ -507,20 +578,21 @@ def get_features_to_list():
     global counter
     global argument_1, argument_2
     global sight_pixels, hearing_words
+    global user_action_flag
 
     get_touch_values()
     get_sight_values()
     get_hearing_receiver()
     get_feedback_values()
 
-    print(hearing_words)
+    # print(hearing_words)
 
-    without_action_data = [touch_keyboard, touch_mouse, touch_cursor_x, touch_cursor_y, hearing_amplitude, feedback, command, counter, argument_1, argument_2]
+    without_action_data = [touch_button, touch_cursor, touch_cursor_x, touch_cursor_y, hearing_amplitude, feedback, command, counter, argument_1, argument_2]
     combined_without_action_data = without_action_data + sight_pixels + hearing_words
     get_predicted_action_values(combined_without_action_data) # get user Contolled actions
 
     # Define example data (input features and output)
-    with_action_data = [action, touch_keyboard, touch_mouse, touch_cursor_x, touch_cursor_y, hearing_amplitude, feedback, command, counter, argument_1, argument_2]
+    with_action_data = [action, touch_button, touch_cursor, touch_cursor_x, touch_cursor_y, hearing_amplitude, feedback, command, counter, argument_1, argument_2]
     combined_with_action_data = with_action_data + sight_pixels + hearing_words
 
     with open(DATASET_FILENAME, 'a', newline='') as file:
@@ -529,7 +601,7 @@ def get_features_to_list():
         # Write example data to the CSV file
         writer.writerows([combined_with_action_data])
 
-    if previous_controlled_action_flag == True and controlled_action_flag == False:
+    if not user_action_flag:
         # Create an empty list to store the data
         data = []
 
@@ -550,15 +622,12 @@ def get_features_to_list():
                 # Append the row to the data list
                 data.append(row)
 
-        train_sgd_regressor_online(data[0])
-    elif controlled_action_flag == False:
-        # Train the model with the sample data
-        train_sgd_regressor_online(combined_with_action_data)
-
-        # if RESET_FILES:
-        #     with open(DATASET_FILENAME, 'w', newline='') as file:
-        #         writer = csv.writer(file)
-        #         writer.writerows([combined_variable_names])
+        train_sgd_regressor_online(data)
+ 
+        if RESET_TRAINING_FILES:
+            with open(DATASET_FILENAME, 'w', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerows([combined_variable_names])
 
 if __name__ == '__main__':
     # Initialize a socket server to listen for hearing values
@@ -572,7 +641,7 @@ if __name__ == '__main__':
     hearing_values_socket, _ = server_socket.accept()
     print("Connected to the hearing values script.")
 
-    if RESET_FILES:
+    if RESET_STARTING_FILES:
         initialize_model(combined_with_action_data)
 
         with open(DATASET_FILENAME, 'w', newline='') as file:
@@ -583,13 +652,13 @@ if __name__ == '__main__':
         with MouseListener(on_click=on_click) as mouse_listener:
             try:
                 while True:
-                    previous_controlled_action_flag = controlled_action_flag
                     print("---")
                     get_features_to_list()
             except KeyboardInterrupt:
+                print("Program ended due to Ctrl+C in the terminal.")
+                # Clean up and close sockets
                 keyboard_listener.stop()
                 mouse_listener.stop()
-
-                # Close sockets
                 hearing_values_socket.close()
                 server_socket.close()
+                exit(0)
