@@ -1,5 +1,9 @@
 # Touch-and-Talk System
 
+Here's an image of my project:
+
+![Project Image](https://pbs.twimg.com/media/GBJw4trWIAASN_w?format=jpg&name=medium)
+
 This is a Python script for a Touch-and-Talk system that allows users to interact with their computer through touch and voice commands. The system uses machine learning to predict and execute user actions based on touch and hearing inputs. The script captures touch events (keyboard and mouse) and hearing inputs, processes the data, and trains an online machine learning model for predicting user actions.
 
 ## Features
